@@ -1,14 +1,3 @@
-from flask import Flask
-
-app = Flask(__name__)
-
-@app.route('/devops-bot/uptime')
-def uptime():
-    return "The system is up and running!"
-
-if __name__ == "__main__":
-    app.run()
-root@devops-bot:~/devops_bot# cat setup.py
 from setuptools import setup, find_packages
 
 setup(
