@@ -83,7 +83,10 @@ def load_aws_credentials():
         save_aws_credentials(access_key, secret_key, region)
         return load_aws_credentials()
 
-
+@cli.command(name="init", help="Initialize the DevOps Bot working directory.")
+def init():
+    ensure_folder(BASE_DIR)
+    click.echo(f"Working directory initialized at {BASE_DIR}")
 
 
 ensure_folder(BASE_DIR)
