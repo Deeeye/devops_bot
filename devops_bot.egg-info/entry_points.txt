@@ -1,2 +1,0 @@
-[console_scripts]
-dob = devops_bot.cli:cli
