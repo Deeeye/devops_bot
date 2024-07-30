@@ -1,31 +1,30 @@
 #!/bin/bash
 
-# Create a temporary directory for extraction
-TEMP_DIR=$(mktemp -d)
-echo "Created temporary directory at $TEMP_DIR"
+# Create a temporary directory
+TMP_DIR=$(mktemp -d)
+echo "Created temporary directory at $TMP_DIR"
 
-# Check if the wheel file exists
-WHEEL_FILE=$(ls dist/*.whl 2>/dev/null)
-if [ -z "$WHEEL_FILE" ]; then
-    echo "Wheel file not found in the dist/ directory. Exiting."
-    exit 1
-fi
+# Extract the embedded tar.gz file (containing the wheel and install script) to the temporary directory
+tail -n +50 "$0" | tar -xz -C "$TMP_DIR"
+cd "$TMP_DIR"
 
-# Copy the wheel file to the temporary directory
-cp $WHEEL_FILE $TEMP_DIR/
-echo "Copied wheel file to $TEMP_DIR"
-
-# Set up Python virtual environment
-python3 -m venv $TEMP_DIR/env
-source $TEMP_DIR/env/bin/activate
+# Create virtual environment
+python3 -m venv env
+source env/bin/activate
 
 # Upgrade pip and install the wheel file
 pip install --upgrade pip
-pip install $TEMP_DIR/*.whl
+pip install ./devops_bot-0.1-py3-none-any.whl
+
+# Deactivate virtual environment
+deactivate
 
 # Cleanup
-deactivate
-rm -rf $TEMP_DIR
+cd /
+rm -rf "$TMP_DIR"
+echo "Installation completed successfully."
 
-echo "Installation complete. You can now use the devops_bot CLI."
+exit 0
+
+# The following line must be the 50th line (or adjusted to the correct line number)
 
