@@ -1,32 +1,3 @@
-#!/bin/bash
-
-# Create a temporary directory
-TMP_DIR=$(mktemp -d)
-echo "Created temporary directory at $TMP_DIR"
-
-# Decode the wheel file
-cat << 'EOF' > $TMP_DIR/devops_bot.whl.b64
-<content of devops_bot.whl.b64>
-EOF
-
-# Decode the base64 encoded file
-base64 -d $TMP_DIR/devops_bot.whl.b64 > $TMP_DIR/devops_bot.whl
-
-# Create a virtual environment
-python3 -m venv $TMP_DIR/env
-source $TMP_DIR/env/bin/activate
-
-# Upgrade pip and install the wheel file
-pip install --upgrade pip
-pip install $TMP_DIR/devops_bot.whl
-
-# Deactivate the virtual environment
-deactivate
-
-# Cleanup
-rm -rf $TMP_DIR
-echo "Installation completed successfully."
-
 UEsDBBQAAAAIAK2S/lishaIUBAAAAAIAAAAWAAAAZGV2b3BzX2JvdC9fX2luaXRfXy5weePlAgBQ
 SwMEFAAAAAgArZL+WGKVCaQlLwAAtvIAABEAAABkZXZvcHNfYm90L2NsaS5wee19/XPbRpLo76nK
 /4BlygUooSjZzubdqYrvTpbkRBtbdklycimtCgWRoISYBLgAKEer4vvbX3fPV89gAJKyko1vzVRk
