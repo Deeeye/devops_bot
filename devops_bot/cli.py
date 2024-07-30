@@ -22,6 +22,8 @@ from botocore.exceptions import ClientError, NoCredentialsError, PartialCredenti
 import yaml
 from tqdm import tqdm
 
+
+
 cli = click.Group()
 
 # Constants
@@ -40,6 +42,8 @@ DOB_SCREENPLAY_FILE = os.path.join(BASE_DIR, "dob_screenplay.yaml")
 VAULT_FOLDER = os.path.join(BASE_DIR, "vault")
 CONFIG_FILE = os.path.join(VAULT_FOLDER, "config.json")
 TOKEN_FILE = os.path.join(BASE_DIR, "token")
+ALERT_CONFIG_FILE = os.path.join(BASE_DIR, "alert_config.json")
+
 
 # Flask app initialization
 app = Flask(__name__)
@@ -48,6 +52,39 @@ app = Flask(__name__)
 def ensure_folder(path, mode=0o700):
     if not os.path.exists(path):
         os.makedirs(path, mode=mode, exist_ok=True)
+
+
+def load_key():
+    if not os.path.exists(KEY_FILE):
+        click.echo("Encryption key not found. Please configure the vault first.")
+        raise FileNotFoundError("Encryption key not found.")
+    return open(KEY_FILE, 'rb').read()
+
+# Generate encryption key
+def generate_key():
+    key = Fernet.generate_key()
+    with open(KEY_FILE, 'wb') as key_file:
+        key_file.write(key)
+    click.echo("Encryption key generated and saved.")
+
+
+def load_aws_credentials():
+    if os.path.exists(AWS_CREDENTIALS_FILE):
+        key = load_key()
+        with open(AWS_CREDENTIALS_FILE, 'rb') as cred_file:
+            encrypted_credentials = cred_file.read()
+        decrypted_credentials = decrypt_data(encrypted_credentials, key)
+        return json.loads(decrypted_credentials)
+    else:
+        click.echo("AWS credentials not found. Please provide them.")
+        access_key = click.prompt('AWS Access Key ID')
+        secret_key = click.prompt('AWS Secret Access Key')
+        region = click.prompt('AWS Region')
+        save_aws_credentials(access_key, secret_key, region)
+        return load_aws_credentials()
+
+
+
 
 ensure_folder(BASE_DIR)
 ensure_folder(VERSION_DIR)
@@ -414,20 +451,128 @@ def login():
     else:
         click.echo("Invalid username or password")
 
-@cli.command(name="system-monitor", help="Monitor system information.")
+
+def monitor_system():
+    cpu_times = psutil.cpu_times()
+    virtual_memory = psutil.virtual_memory()
+    swap_memory = psutil.swap_memory()
+    disk_usage = psutil.disk_usage('/')
+    network_stats = psutil.net_io_counters()
+    boot_time = datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S")
+
+    system_info = [
+        ["CPU Usage (%)", psutil.cpu_percent(interval=1)],
+        ["CPU User Time (s)", cpu_times.user],
+        ["CPU System Time (s)", cpu_times.system],
+        ["CPU Idle Time (s)", cpu_times.idle],
+        ["Memory Usage (%)", virtual_memory.percent],
+        ["Total Memory (GB)", virtual_memory.total / (1024 ** 3)],
+        ["Available Memory (GB)", virtual_memory.available / (1024 ** 3)],
+        ["Used Memory (GB)", virtual_memory.used / (1024 ** 3)],
+        ["Swap Memory Usage (%)", swap_memory.percent],
+        ["Total Swap Memory (GB)", swap_memory.total / (1024 ** 3)],
+        ["Used Swap Memory (GB)", swap_memory.used / (1024 ** 3)],
+        ["Disk Usage (%)", disk_usage.percent],
+        ["Total Disk Space (GB)", disk_usage.total / (1024 ** 3)],
+        ["Used Disk Space (GB)", disk_usage.used / (1024 ** 3)],
+        ["Free Disk Space (GB)", disk_usage.free / (1024 ** 3)],
+        ["Network Bytes Sent (MB)", network_stats.bytes_sent / (1024 ** 2)],
+        ["Network Bytes Received (MB)", network_stats.bytes_recv / (1024 ** 2)],
+        ["Network Packets Sent", network_stats.packets_sent],
+        ["Network Packets Received", network_stats.packets_recv],
+        ["Boot Time", boot_time]
+    ]
+
+    return system_info
+
+def display_system_info(system_info):
+    click.echo(tabulate(system_info, headers=["Metric", "Value"], tablefmt="grid"))
+
+def check_for_threats(system_info):
+    # Basic threat detection logic
+    alerts = []
+    if system_info[0][1] > 90:  # CPU Usage
+        alerts.append("High CPU usage detected!")
+    if system_info[4][1] > 90:  # Memory Usage
+        alerts.append("High memory usage detected!")
+    if system_info[11][1] > 90:  # Disk Usage
+        alerts.append("High disk usage detected!")
+    return alerts
+
+@cli.command(name="system-monitor", help="Monitor and display system information.")
 def system_monitor():
     """Monitor and display system information."""
-    system_info = {
-        "CPU Usage": psutil.cpu_percent(interval=1),
-        "Memory Usage": psutil.virtual_memory().percent,
-        "Disk Usage": psutil.disk_usage('/').percent,
-        "Network Stats": psutil.net_io_counters(),
-        "Boot Time": datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S"),
-    }
+    system_info = monitor_system()
+    display_system_info(system_info)
 
-    click.echo("System Monitoring Information:")
-    for key, value in system_info.items():
-        click.echo(f"{key}: {value}")
+    alerts = check_for_threats(system_info)
+    if alerts:
+        click.echo("\nAlerts:")
+        for alert in alerts:
+            click.echo(f" - {alert}")
+
+    # Check if user wants to save logs
+    if click.confirm("Do you want to save the logs?", default=True):
+        config = load_config(CONFIG_FILE)
+        if not config:
+            storage_option = click.prompt("Enter 'local' to save locally or 's3' to save to S3", type=str)
+            if storage_option == 's3':
+                bucket_name = click.prompt("Enter the S3 bucket name", type=str)
+                region_name = click.prompt("Enter the S3 region", type=str)
+                config = {'storage': 's3', 'bucket_name': bucket_name, 'region_name': region_name}
+            else:
+                config = {'storage': 'local'}
+            save_config(config, CONFIG_FILE)
+        save_logs(system_info, config)
+
+    # Check if user wants to enable alerts
+    if click.confirm("Do you want to set up alerts?", default=False):
+        alert_config = load_config(ALERT_CONFIG_FILE)
+        if not alert_config:
+            alert_option = click.prompt("Enter 'email' for email alerts or 'sms' for SMS alerts", type=str)
+            if alert_option == 'email':
+                email_address = click.prompt("Enter your email address", type=str)
+                alert_config = {'alert': 'email', 'email_address': email_address}
+            else:
+                phone_number = click.prompt("Enter your phone number", type=str)
+                alert_config = {'alert': 'sms', 'phone_number': phone_number}
+            save_config(alert_config, ALERT_CONFIG_FILE)
+        setup_alerts(alerts, alert_config)
+
+def save_logs(system_info, config):
+    if config['storage'] == 's3':
+        upload_to_s3(system_info, config['bucket_name'], config['region_name'])
+    else:
+        ensure_folder(os.path.dirname(LOG_FILE))
+        with open(LOG_FILE, 'a') as f:
+            f.write(json.dumps(system_info) + '\n')
+        click.echo(f"Logs saved locally at {LOG_FILE}")
+
+def upload_to_s3(system_info, bucket_name, region_name):
+    try:
+        s3 = boto3.client('s3', region_name=region_name)
+        log_data = json.dumps(system_info)
+        log_file_name = f"system_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        s3.put_object(Bucket=bucket_name, Key=log_file_name, Body=log_data)
+        click.echo(f"Logs uploaded to S3 bucket '{bucket_name}' as '{log_file_name}'")
+    except (NoCredentialsError, PartialCredentialsError, ClientError) as e:
+        click.echo(f"Error uploading logs to S3: {e}")
+
+def setup_alerts(alerts, alert_config):
+    if alert_config['alert'] == 'email':
+        send_email_alert(alerts, alert_config['email_address'])
+    else:
+        send_sms_alert(alerts, alert_config['phone_number'])
+
+def send_email_alert(alerts, email_address):
+    # Placeholder for actual email alerting logic
+    click.echo(f"Email alert sent to {email_address} with alerts: {alerts}")
+
+def send_sms_alert(alerts, phone_number):
+    # Placeholder for actual SMS alerting logic
+    click.echo(f"SMS alert sent to {phone_number} with alerts: {alerts}")
+
+
 
 # Flask routes
 @app.route('/register_worker', methods=['POST'])
@@ -668,6 +813,8 @@ def create_ec2(instance_type, ami_id, key_name, security_group, count, tags):
     else:
         click.echo(click.style("Instance creation aborted.", fg="yellow"))
 
+
+# Load version info
 def load_version_info(version_id):
     key = load_key()
     if os.path.exists(os.path.join(VERSION_DIR, f"{version_id}.enc")):
@@ -678,15 +825,17 @@ def load_version_info(version_id):
     else:
         try:
             credentials = load_aws_credentials()
-            if credentials:
-                s3 = boto3.client('s3', **credentials)
-                response = s3.get_object(Bucket=VERSION_BUCKET_NAME, Key=f"{version_id}.enc")
-                encrypted_version_info = response['Body'].read()
-                decrypted_version_info = decrypt_data(encrypted_version_info, key)
-                return json.loads(decrypted_version_info)
+            s3 = boto3.client('s3', **credentials)
+            response = s3.get_object(Bucket=VERSION_BUCKET_NAME, Key=f"{version_id}.enc")
+            encrypted_version_info = response['Body'].read()
+            decrypted_version_info = decrypt_data(encrypted_version_info, key)
+            return json.loads(decrypted_version_info)
         except ClientError as e:
             click.echo(click.style(f"No version information found for ID {version_id}.", fg="red"))
             return None
+
+
+
 
 @cli.command(name="recreate-ec2", help="Recreate EC2 instances using a version ID.")
 @click.option('--version-id', required=True, help="Version ID to recreate instances from")
@@ -746,9 +895,18 @@ def recreate_ec2(version_id):
     else:
         click.echo(click.style("Instance recreation aborted.", fg="yellow"))
 
+
+
+# List versions function
 def list_versions():
-    versions = []
+    if not os.path.exists(KEY_FILE):
+        click.echo("No encryption key found. Please run 'dob configure-aws' to set up your credentials.")
+        return []
+
     key = load_key()
+    versions = []
+
+    # Check local versions
     for file_name in os.listdir(VERSION_DIR):
         if file_name.endswith(".enc"):
             version_id = file_name.split(".")[0]
@@ -758,27 +916,17 @@ def list_versions():
                 instance_count = len(version_info['content'])
                 versions.append((version_id, version_info.get('comment', ''), timestamp, instance_count))
 
-    credentials = load_aws_credentials()
-    if credentials:
-        s3 = boto3.client('s3', **credentials)
-        try:
-            response = s3.list_objects_v2(Bucket=VERSION_BUCKET_NAME)
-            for obj in response.get('Contents', []):
-                version_id = obj['Key'].split(".")[0]
-                version_info = load_version_info(version_id)
-                if version_info:
-                    timestamp = obj['LastModified'].strftime('%Y-%m-%d %H:%M:%S')
-                    instance_count = len(version_info['content'])
-                    versions.append((version_id, version_info.get('comment', ''), timestamp, instance_count))
-        except ClientError as e:
-            click.echo(click.style(f"Error listing versions in S3: {e}", fg="red"))
-
     return versions
 
+# View version command
 @cli.command(name="view-version", help="View version information.")
 @click.option('-o', '--output', type=click.Choice(['table', 'wide']), default='table', help="Output format")
 def view_version(output):
     versions = list_versions()
+    if not versions:
+        click.echo("No versions available. Ensure your credentials are configured properly.")
+        return
+
     if output == 'table':
         table = [[version_id, comment, timestamp, count] for version_id, comment, timestamp, count in versions]
         headers = ["Version ID", "Comment", "Date", "Time", "Count"]
@@ -792,6 +940,8 @@ def view_version(output):
             click.echo(click.style(f"Count: {count}", fg="green"))
             click.echo(click.style(json.dumps(version_info['content'], indent=2), fg="green"))
             click.echo("-" * 80)
+
+
 
 @cli.command(name="list-ec2", help="List EC2 instances in a table format.")
 @click.option('--instance-ids', multiple=True, help="Filter by instance IDs")
@@ -1086,7 +1236,7 @@ def dob_screenplay(script):
                 platform_commands = screenplay['commands'].get(platform, screenplay['commands']['default'])
                 for command in platform_commands:
                     execute_commands_on_instance(instance_id, command)
-                    
+
     except Exception as e:
         click.echo(f"Error creating instances: {e}")
 
@@ -1254,3 +1404,4 @@ def solve(issue):
 
 if __name__ == '__main__':
     cli()
+    app.run(debug=True)
